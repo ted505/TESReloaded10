@@ -1,5 +1,9 @@
 #pragma once
 
+static bool MaterialTraceFrame = false;
+static UInt32 MaterialTraceFrameId = 0;
+static UInt32 MaterialTraceDrawIndex = 0;
+
 void (__thiscall* Render)(Main*, BSRenderedTexture*, int, int) = (void (__thiscall*)(Main*, BSRenderedTexture*, int, int))Hooks::Render;
 void __fastcall RenderHook(Main* This, UInt32 edx, BSRenderedTexture* RenderedTexture, int Arg2, int Arg3) {
 	
@@ -11,9 +15,251 @@ void __fastcall RenderHook(Main* This, UInt32 edx, BSRenderedTexture* RenderedTe
 	TheRenderManager->SetupSceneCamera();
 
 	TheShaderManager->UpdateConstants();
+	MaterialTraceFrame = TheSettingManager->SettingsMain.Develop.DebugMode &&
+		!InterfaceManager->IsActive(Menu::kMenuType_Console) &&
+		Global->OnKeyDown(TheSettingManager->SettingsMain.Develop.TraceShaders);
+	if (MaterialTraceFrame) {
+		MaterialTraceFrameId++;
+		MaterialTraceDrawIndex = 0;
+		Logger::Log("METALFRAME BEGIN id=%u", MaterialTraceFrameId);
+	}
 	//if (SettingsMain->Develop.TraceShaders && InterfaceManager->IsActive(Menu::MenuType::kMenuType_None) && Global->OnKeyDown(SettingsMain->Develop.TraceShaders) && DWNode::Get() == NULL) DWNode::Create();
 	(*Render)(This, RenderedTexture, Arg2, Arg3);
+	if (MaterialTraceFrame) {
+		Logger::Log("METALFRAME END id=%u draws=%u", MaterialTraceFrameId, MaterialTraceDrawIndex);
+		MaterialTraceFrame = false;
+	}
 
+}
+
+namespace {
+	struct RuntimeTextureString {
+		char* data;
+		UInt16 length;
+		UInt16 capacity;
+	};
+
+	struct RuntimeShaderTextureSet {
+		void* vtable;
+		UInt32 refCount;
+		RuntimeTextureString paths[6];
+	};
+
+	static_assert(sizeof(RuntimeTextureString) == 0x08, "Unexpected runtime texture string layout");
+	static_assert(sizeof(RuntimeShaderTextureSet) == 0x38, "Unexpected BSShaderTextureSet layout");
+
+	static const UInt32 PPLightingPropertyVtable = 0x010AE0D0;
+	static const UInt32 SplitSpecularAlbedoSampler = 8;
+	static const UInt32 MetallicSampler = 15;
+	static std::map<std::string, IDirect3DBaseTexture9*> MetallicTextureCache;
+	static NiGeometry* ActiveMaterialGeometry = nullptr;
+	static UInt32 ActiveMaterialPassEnum = 0;
+	static bool MaterialDrawHookAttached = false;
+
+	static std::string GetMetallicPath(const char* DiffusePath) {
+		if (!DiffusePath || !DiffusePath[0]) return std::string();
+
+		std::string path = DiffusePath;
+		std::replace(path.begin(), path.end(), '/', '\\');
+		if (_strnicmp(path.c_str(), "Data\\", 5) != 0) {
+			if (_strnicmp(path.c_str(), "Textures\\", 9) == 0)
+				path.insert(0, "Data\\");
+			else
+				path.insert(0, "Data\\Textures\\");
+		}
+
+		size_t slash = path.find_last_of("\\");
+		size_t dot = path.find_last_of('.');
+		if (dot != std::string::npos && (slash == std::string::npos || dot > slash))
+			path.erase(dot);
+		return path + "_metal.dds";
+	}
+
+	static IDirect3DBaseTexture9* GetGeometryMetallicTexture(NiGeometry* Geometry) {
+		if (!Geometry) return nullptr;
+		NiProperty* shade = Geometry->GetProperty(NiProperty::kType_Shade);
+		if (!shade || *(UInt32*)shade != PPLightingPropertyVtable) return nullptr;
+
+		BSShaderPPLightingProperty* pp = static_cast<BSShaderPPLightingProperty*>(shade);
+		RuntimeShaderTextureSet* set = reinterpret_cast<RuntimeShaderTextureSet*>(pp->spTextureSet);
+		if (!set) return nullptr;
+
+		std::string path = GetMetallicPath(set->paths[0].data);
+		if (path.empty()) return nullptr;
+		std::string key = path;
+		std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+		auto found = MetallicTextureCache.find(key);
+		if (found != MetallicTextureCache.end()) return found->second;
+
+		IDirect3DBaseTexture9* texture = nullptr;
+		if (std::filesystem::exists(path))
+			texture = TheTextureManager->GetFileTexture(path, TextureRecord::PlanarBuffer);
+		MetallicTextureCache[key] = texture;
+		return texture;
+	}
+
+	static IDirect3DBaseTexture9* GetGeometryDiffuseTexture(NiGeometry* Geometry) {
+		if (!Geometry) return nullptr;
+		NiProperty* shade = Geometry->GetProperty(NiProperty::kType_Shade);
+		if (!shade || *(UInt32*)shade != PPLightingPropertyVtable) return nullptr;
+
+		BSShaderPPLightingProperty* pp = static_cast<BSShaderPPLightingProperty*>(shade);
+		if (!pp->ppTextures[0] || !*pp->ppTextures[0]) return nullptr;
+
+		NiSourceTexture* diffuse = *pp->ppTextures[0];
+		return diffuse->rendererData ? diffuse->rendererData->dTexture : nullptr;
+	}
+
+	static bool IsSplitSpecularPass(UInt32 PassEnum) {
+		// BSSM_2x_SPECULARDIR through BSSM_2x_SPECULARPT3_SbShp. These are the
+		// ONLY_SPECULAR permutations selected when the engine decomposes a material.
+		return PassEnum >= 346 && PassEnum <= 375;
+	}
+
+}
+
+typedef HRESULT (STDMETHODCALLTYPE* DrawIndexedPrimitive_t)(IDirect3DDevice9*, D3DPRIMITIVETYPE,
+	INT, UINT, UINT, UINT, UINT);
+static DrawIndexedPrimitive_t DrawIndexedPrimitiveOriginal = nullptr;
+
+static HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveHook(IDirect3DDevice9* Device,
+	D3DPRIMITIVETYPE PrimitiveType, INT BaseVertexIndex, UINT MinVertexIndex, UINT NumVertices,
+	UINT StartIndex, UINT PrimitiveCount) {
+	NiGeometry* geometry = ActiveMaterialGeometry;
+	NiProperty* shade = geometry ? geometry->GetProperty(NiProperty::kType_Shade) : nullptr;
+	if (!shade || *(UInt32*)shade != PPLightingPropertyVtable)
+		return DrawIndexedPrimitiveOriginal(Device, PrimitiveType, BaseVertexIndex, MinVertexIndex,
+			NumVertices, StartIndex, PrimitiveCount);
+
+	IDirect3DBaseTexture9* previousTexture = nullptr;
+	IDirect3DBaseTexture9* previousSplitAlbedo = nullptr;
+	float previousConstant[4];
+	DWORD previousSampler[6];
+	DWORD previousSplitAlbedoSampler[6];
+	const D3DSAMPLERSTATETYPE samplerTypes[6] = {
+		D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER,
+		D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE
+	};
+	Device->GetTexture(MetallicSampler, &previousTexture);
+	Device->GetPixelShaderConstantF(139, previousConstant, 1);
+	for (int i = 0; i < 6; i++)
+		Device->GetSamplerState(MetallicSampler, samplerTypes[i], &previousSampler[i]);
+
+	IDirect3DBaseTexture9* metallic = GetGeometryMetallicTexture(geometry);
+	const bool splitSpecular = metallic && IsSplitSpecularPass(ActiveMaterialPassEnum);
+	IDirect3DBaseTexture9* splitAlbedo = splitSpecular ? GetGeometryDiffuseTexture(geometry) : nullptr;
+	if (splitSpecular) {
+		Device->GetTexture(SplitSpecularAlbedoSampler, &previousSplitAlbedo);
+		for (int i = 0; i < 6; i++)
+			Device->GetSamplerState(SplitSpecularAlbedoSampler, samplerTypes[i], &previousSplitAlbedoSampler[i]);
+	}
+
+	// Diagnose the saloon test material's complete draw composition. Log only distinct state
+	// combinations so a reproduced camera sweep remains readable.
+	RuntimeShaderTextureSet* textureSet = reinterpret_cast<RuntimeShaderTextureSet*>(
+		static_cast<BSShaderPPLightingProperty*>(shade)->spTextureSet);
+	std::string metallicPath = textureSet ? GetMetallicPath(textureSet->paths[0].data) : std::string();
+	if (metallicPath.find("ProspectorSaloon_metal.dds") != std::string::npos ||
+		metallicPath.find("prospectorsaloon_metal.dds") != std::string::npos) {
+		DWORD alphaBlend, srcBlend, dstBlend, blendOp, separateAlpha;
+		DWORD srcBlendAlpha, dstBlendAlpha, blendOpAlpha, colorWrite, zWrite;
+		Device->GetRenderState(D3DRS_ALPHABLENDENABLE, &alphaBlend);
+		Device->GetRenderState(D3DRS_SRCBLEND, &srcBlend);
+		Device->GetRenderState(D3DRS_DESTBLEND, &dstBlend);
+		Device->GetRenderState(D3DRS_BLENDOP, &blendOp);
+		Device->GetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, &separateAlpha);
+		Device->GetRenderState(D3DRS_SRCBLENDALPHA, &srcBlendAlpha);
+		Device->GetRenderState(D3DRS_DESTBLENDALPHA, &dstBlendAlpha);
+		Device->GetRenderState(D3DRS_BLENDOPALPHA, &blendOpAlpha);
+		Device->GetRenderState(D3DRS_COLORWRITEENABLE, &colorWrite);
+		Device->GetRenderState(D3DRS_ZWRITEENABLE, &zWrite);
+
+		NiD3DPass* activePass = *(NiD3DPass**)0x0126F74C;
+		const char* pixelName = activePass && activePass->PixelShader && activePass->PixelShader->Name
+			? activePass->PixelShader->Name : "(unknown)";
+		char stateKey[256];
+		sprintf_s(stateKey, "%u|%s|%u|%u|%u|%u|%u|%u|%u|%u|%u|%u",
+			ActiveMaterialPassEnum, pixelName, alphaBlend, srcBlend, dstBlend, blendOp,
+			separateAlpha, srcBlendAlpha, dstBlendAlpha, blendOpAlpha, colorWrite, zWrite);
+		static std::map<std::string, bool> seenStates;
+		if (!seenStates[stateKey]) {
+			seenStates[stateKey] = true;
+			Logger::Log("METALPASS enum=%u desc=%s ps=%s blend=%u src=%u dst=%u op=%u sepA=%u srcA=%u dstA=%u opA=%u write=%08X zwrite=%u",
+				ActiveMaterialPassEnum,
+				Pointers::Functions::GetPassDescription(ActiveMaterialPassEnum), pixelName,
+				alphaBlend, srcBlend, dstBlend, blendOp, separateAlpha,
+				srcBlendAlpha, dstBlendAlpha, blendOpAlpha, colorWrite, zWrite);
+		}
+
+		if (MaterialTraceFrame) {
+			MaterialTraceDrawIndex++;
+			const char* geometryName = geometry->m_pcName ? geometry->m_pcName : "(unnamed)";
+			Logger::Log("METALDRAW frame=%u order=%u geo=%08X name=%s enum=%u desc=%s ps=%s blend=%u src=%u dst=%u op=%u sepA=%u srcA=%u dstA=%u opA=%u write=%08X zwrite=%u",
+				MaterialTraceFrameId, MaterialTraceDrawIndex, (UInt32)geometry, geometryName,
+				ActiveMaterialPassEnum,
+				Pointers::Functions::GetPassDescription(ActiveMaterialPassEnum), pixelName,
+				alphaBlend, srcBlend, dstBlend, blendOp, separateAlpha,
+				srcBlendAlpha, dstBlendAlpha, blendOpAlpha, colorWrite, zWrite);
+		}
+	}
+
+	// .y enables the raw-mask diagnostic for mapped materials. This deliberately bypasses
+	// lighting in the replacement shader so angular changes can only come from binding,
+	// UV/sampling, or pass selection—not the BRDF or shadows.
+	float metallicPresent[4] = {
+		metallic ? 1.0f : 0.0f,
+		0.0f,
+		0.0f,
+		0.0f
+	};
+	Device->SetTexture(MetallicSampler, metallic);
+	Device->SetPixelShaderConstantF(139, metallicPresent, 1);
+	if (splitSpecular) {
+		Device->SetTexture(SplitSpecularAlbedoSampler, splitAlbedo);
+		Device->SetSamplerState(SplitSpecularAlbedoSampler, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+		Device->SetSamplerState(SplitSpecularAlbedoSampler, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+		Device->SetSamplerState(SplitSpecularAlbedoSampler, D3DSAMP_MAGFILTER, D3DTEXF_ANISOTROPIC);
+		Device->SetSamplerState(SplitSpecularAlbedoSampler, D3DSAMP_MINFILTER, D3DTEXF_ANISOTROPIC);
+		Device->SetSamplerState(SplitSpecularAlbedoSampler, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+		Device->SetSamplerState(SplitSpecularAlbedoSampler, D3DSAMP_SRGBTEXTURE, 1);
+	}
+	if (metallic) {
+		Device->SetSamplerState(MetallicSampler, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+		Device->SetSamplerState(MetallicSampler, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+		Device->SetSamplerState(MetallicSampler, D3DSAMP_MAGFILTER, D3DTEXF_ANISOTROPIC);
+		Device->SetSamplerState(MetallicSampler, D3DSAMP_MINFILTER, D3DTEXF_ANISOTROPIC);
+		Device->SetSamplerState(MetallicSampler, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+		Device->SetSamplerState(MetallicSampler, D3DSAMP_SRGBTEXTURE, 0);
+	}
+
+	HRESULT result = DrawIndexedPrimitiveOriginal(Device, PrimitiveType, BaseVertexIndex,
+		MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
+
+	Device->SetTexture(MetallicSampler, previousTexture);
+	Device->SetPixelShaderConstantF(139, previousConstant, 1);
+	for (int i = 0; i < 6; i++)
+		Device->SetSamplerState(MetallicSampler, samplerTypes[i], previousSampler[i]);
+	if (splitSpecular) {
+		Device->SetTexture(SplitSpecularAlbedoSampler, previousSplitAlbedo);
+		for (int i = 0; i < 6; i++)
+			Device->SetSamplerState(SplitSpecularAlbedoSampler, samplerTypes[i], previousSplitAlbedoSampler[i]);
+	}
+	if (previousTexture) previousTexture->Release();
+	if (previousSplitAlbedo) previousSplitAlbedo->Release();
+	return result;
+}
+
+void AttachMaterialDrawHook() {
+	if (MaterialDrawHookAttached || !TheRenderManager || !TheRenderManager->device) return;
+	void** vtable = *(void***)TheRenderManager->device;
+	DrawIndexedPrimitiveOriginal = (DrawIndexedPrimitive_t)vtable[82];
+	if (!DrawIndexedPrimitiveOriginal) return;
+
+	DetourTransactionBegin();
+	DetourUpdateThread(GetCurrentThread());
+	DetourAttach(&(PVOID&)DrawIndexedPrimitiveOriginal, DrawIndexedPrimitiveHook);
+	if (DetourTransactionCommit() == NO_ERROR)
+		MaterialDrawHookAttached = true;
 }
 
 void (__thiscall* SetShaders)(BSShader*, UInt32) = (void (__thiscall*)(BSShader*, UInt32))Hooks::SetShaders;
@@ -51,6 +297,18 @@ void __fastcall SetShadersHook(BSShader* This, UInt32 edx, UInt32 PassIndex) {
 	}
 	(*SetShaders)(This, PassIndex);
 
+}
+
+void (__cdecl* RenderGeometryPass)(void*, UInt32, int, int, int) =
+	(void (__cdecl*)(void*, UInt32, int, int, int))Hooks::RenderGeometryPass;
+void __cdecl RenderGeometryPassHook(void* Pass, UInt32 PassEnum, int Arg3, int Arg4, int Arg5) {
+	NiGeometry* previousGeometry = ActiveMaterialGeometry;
+	UInt32 previousPassEnum = ActiveMaterialPassEnum;
+	ActiveMaterialGeometry = Pass ? *(NiGeometry**)Pass : NULL;
+	ActiveMaterialPassEnum = PassEnum;
+	(*RenderGeometryPass)(Pass, PassEnum, Arg3, Arg4, Arg5);
+	ActiveMaterialGeometry = previousGeometry;
+	ActiveMaterialPassEnum = previousPassEnum;
 }
 
 HRESULT (__thiscall* SetSamplerState)(NiDX9RenderState*, UInt32, D3DSAMPLERSTATETYPE, UInt32, UInt8) = (HRESULT (__thiscall*)(NiDX9RenderState*, UInt32, D3DSAMPLERSTATETYPE, UInt32, UInt8))Hooks::SetSamplerState;

@@ -307,6 +307,7 @@ struct PS_OUTPUT {
 
 #ifdef PS
 
+sampler2D MetallicMap : register(s15);
 
 #if !defined(DIFFUSE) && !defined(ONLY_SPECULAR)
     #if !defined(NO_LIGHT)
@@ -392,6 +393,7 @@ PS_OUTPUT main(PS_INPUT IN)
     dy = ddy(IN.uv.xy);
     
     float2 offsetUV = getParallaxCoords(distance, IN.uv.xy, dx, dy, viewDir.xyz, HeightMap);
+    float metallicness = lerp(TESR_PBRData.x, tex2D(MetallicMap, offsetUV.xy).r, TESR_MaterialMetallic.x);
 
     #if !defined(DIFFUSE) && !defined(ONLY_SPECULAR)
         float4 baseColor = tex2D(BaseMap, offsetUV.xy);
@@ -456,20 +458,20 @@ PS_OUTPUT main(PS_INPUT IN)
     
         #if !defined(DIFFUSE) && !defined(POINT)
             if (TESR_ParallaxData.y)
-                lighting = getSunLighting(IN.lightDir.xyz, PSLightColor[0].rgb * shadowMultiplier, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
+                lighting = getSunLighting(IN.lightDir.xyz, PSLightColor[0].rgb * shadowMultiplier, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness, metallicness);
             else
                 lighting = getVanillaLightingAtt(IN.lightDir.xyz, 1.f, PSLightColor[0].rgb * shadowMultiplier, IN.viewDir.xyz, normal.xyz, baseColor.rgb, normal.a, glossPower);
         #elif defined(DIFFUSE)
             // Pointlight vanilla att.
             if (TESR_ParallaxData.y)
-                lighting = getPointLightLighting(IN.lightDir.xyz, IN.lightDir.w, PSLightColor[0].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
+                lighting = getPointLightLighting(IN.lightDir.xyz, IN.lightDir.w, PSLightColor[0].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness, metallicness);
             else {
                 finalAtt = saturate(1 - tex2D(AttenuationMap, IN.lightAtt.xy).x - tex2D(AttenuationMap, IN.lightAtt.zw).x);
                 lighting = getVanillaLightingAtt(IN.lightDir.xyz, finalAtt, PSLightColor[0].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, normal.a, glossPower);
             }
         #else
             if (TESR_ParallaxData.y)
-                lighting = getPointLightLighting(IN.lightDir.xyz, IN.lightDir.w, PSLightColor[0].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
+                lighting = getPointLightLighting(IN.lightDir.xyz, IN.lightDir.w, PSLightColor[0].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness, metallicness);
             else
                 lighting = getVanillaLighting(IN.lightDir.xyz, IN.lightDir.w, PSLightColor[0].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, normal.a, glossPower);
         #endif
@@ -492,7 +494,7 @@ PS_OUTPUT main(PS_INPUT IN)
             finalAtt = saturate(1 - tex2D(AttenuationMap, IN.light2Att.xy).x - tex2D(AttenuationMap, IN.light2Att.zw).x);
         
             if (TESR_ParallaxData.y)
-                lighting += getPointLightLightingAtt(IN.light2Dir.xyz, finalAtt, PSLightColor[1].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
+                lighting += getPointLightLightingAtt(IN.light2Dir.xyz, finalAtt, PSLightColor[1].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness, metallicness);
             else
                 lighting += getVanillaLightingAtt(IN.light2Dir.xyz, finalAtt, PSLightColor[1].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, normal.a, glossPower);
         #endif
@@ -501,21 +503,21 @@ PS_OUTPUT main(PS_INPUT IN)
             finalAtt = saturate(1 - tex2D(AttenuationMap, IN.light3Att.xy).x - tex2D(AttenuationMap, IN.light3Att.zw).x);
         
             if (TESR_ParallaxData.y)
-                lighting += getPointLightLightingAtt(IN.light3Dir.xyz, finalAtt, PSLightColor[2].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
+                lighting += getPointLightLightingAtt(IN.light3Dir.xyz, finalAtt, PSLightColor[2].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness, metallicness);
             else
                 lighting += getVanillaLightingAtt(IN.light3Dir.xyz, finalAtt, PSLightColor[2].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, normal.a, glossPower);
         #endif
     
         #if NUM_PT_LIGHTS > 1
             if (TESR_ParallaxData.y)
-                lighting += getPointLightLighting(IN.light2Dir.xyz, IN.light2Dir.w, PSLightColor[1].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
+                lighting += getPointLightLighting(IN.light2Dir.xyz, IN.light2Dir.w, PSLightColor[1].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness, metallicness);
             else
                 lighting += getVanillaLighting(IN.light2Dir.xyz, IN.light2Dir.w, PSLightColor[1].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, normal.a, glossPower);
         #endif
     
         #if NUM_PT_LIGHTS > 2
             if (TESR_ParallaxData.y)
-                lighting += getPointLightLighting(IN.light3Dir.xyz, IN.light3Dir.w, PSLightColor[2].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
+                lighting += getPointLightLighting(IN.light3Dir.xyz, IN.light3Dir.w, PSLightColor[2].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness, metallicness);
             else
                 lighting += getVanillaLighting(IN.light3Dir.xyz, IN.light3Dir.w, PSLightColor[2].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, normal.a, glossPower);
         #endif
@@ -531,7 +533,6 @@ PS_OUTPUT main(PS_INPUT IN)
     #endif
     
     OUT.color.rgb = lighting.rgb;
-    
     #if defined(DIFFUSE) || defined(NO_LIGHT)
         OUT.color.a = 1;
     #elif defined(ONLY_SPECULAR)
@@ -543,6 +544,10 @@ PS_OUTPUT main(PS_INPUT IN)
     #else
         OUT.color.a = alpha * AmbientColor.a;
     #endif
+
+    // Constant RGBA diagnostic, after permutation-specific alpha assignment.
+    if (TESR_MaterialMetallic.y > 0.5f)
+        OUT.color = 1.0f;
 
     return OUT;
 };

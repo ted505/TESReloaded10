@@ -34,6 +34,7 @@ struct ShaderConstants {
 	D3DXVECTOR4				sunColor;
 	D3DXVECTOR4				sunAmbient;
 	D3DXVECTOR4				skyColor;
+	D3DXVECTOR4				materialMetallic;   // x: convention metallic map present
 	D3DXVECTOR4				fogData;
 	D3DXVECTOR4				fogDistance;
 	float					fogStart;

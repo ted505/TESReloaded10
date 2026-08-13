@@ -507,6 +507,13 @@ struct PS_OUTPUT {
     sampler2D BaseMap : register(s0);
     sampler2D NormalMap : register(s1);
 #endif
+sampler2D MetallicMap : register(s15);
+#if defined(ONLY_SPECULAR)
+    // The split specular path has NormalMap in s0 and otherwise lacks the material albedo.
+    // s8 is free in object permutations (NVR's object shadow atlas is s9). The draw hook
+    // aliases the already-loaded diffuse D3D texture here only for mapped split-specular draws.
+    sampler2D SplitSpecularAlbedoMap : register(s8);
+#endif
 
 #if !defined(DIFFUSE) && !defined(ONLY_SPECULAR)
     float4 AmbientColor : register(c1);
@@ -562,7 +569,16 @@ PS_OUTPUT main(PS_INPUT IN) {
     normal.xyz = normalize(expand(normal.xyz));
     
     float roughness = getRoughness(normal.a);
-    
+    // Diagnostic: bypass both texture sampling and the per-draw presence constant.
+    // This reproduces the previously stable flat-metallicity shader behavior while
+    // leaving the mapped-material hook and pass structure installed.
+    float metallicness = 1.0f;
+
+    #if defined(ONLY_SPECULAR)
+        baseColor.rgb = lerp(baseColor.rgb, tex2D(SplitSpecularAlbedoMap, IN.uv.xy).rgb,
+                             TESR_MaterialMetallic.x);
+    #endif
+
     //if (TESR_DebugVar.x > 0.0)
     //    roughness = SpecularAA(normal.xyz, roughness, TESR_DebugVar.z);
     
@@ -611,10 +627,10 @@ PS_OUTPUT main(PS_INPUT IN) {
     #endif
 
     #if !defined(DIFFUSE) && !defined(POINT)
-        float3 lighting = getSunLighting(IN.lightDir.xyz, PSLightColor[0].rgb * shadowMultiplier, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
+        float3 lighting = getSunLighting(IN.lightDir.xyz, PSLightColor[0].rgb * shadowMultiplier, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness, metallicness);
     #else
         // Pointlights only.
-        float3 lighting = getPointLightLighting(IN.lightDir.xyz, IN.lightDir.w, PSLightColor[0].rgb * shadowMultiplier, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
+        float3 lighting = getPointLightLighting(IN.lightDir.xyz, IN.lightDir.w, PSLightColor[0].rgb * shadowMultiplier, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness, metallicness);
     #endif
     
     // Self emmitance.
@@ -633,11 +649,11 @@ PS_OUTPUT main(PS_INPUT IN) {
 
     // Other light sources.
     #if LIGHTS > 1 || NUM_PT_LIGHTS > 1
-        lighting += getPointLightLighting(IN.light2Dir.xyz, IN.light2Dir.w, PSLightColor[1].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
+        lighting += getPointLightLighting(IN.light2Dir.xyz, IN.light2Dir.w, PSLightColor[1].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness, metallicness);
     #endif
     
     #if LIGHTS > 2 || NUM_PT_LIGHTS > 2
-        lighting += getPointLightLighting(IN.light3Dir.xyz, IN.light3Dir.w, PSLightColor[2].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
+        lighting += getPointLightLighting(IN.light3Dir.xyz, IN.light3Dir.w, PSLightColor[2].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness, metallicness);
     #endif
     
     float3 finalColor = lighting.rgb;
@@ -667,6 +683,10 @@ PS_OUTPUT main(PS_INPUT IN) {
     #else
         OUT.color.a = baseColor.a * AmbientColor.a;
     #endif
+
+    // Constant RGBA diagnostic, after permutation-specific alpha assignment.
+    if (TESR_MaterialMetallic.y > 0.5f)
+        OUT.color = 1.0f;
 
     return OUT;
 }
@@ -728,6 +748,7 @@ struct PS_OUTPUT {
 
 sampler2D BaseMap : register(s0);
 sampler2D NormalMap : register(s1);
+sampler2D MetallicMap : register(s15);
 
 float4 AmbientColor : register(c1);
 
@@ -768,6 +789,10 @@ PS_OUTPUT main(PS_INPUT IN) {
     normal.xyz = normalize(expand(normal.xyz));
     
     float roughness = getRoughness(normal.a);
+    // Diagnostic: bypass both texture sampling and the per-draw presence constant.
+    // This reproduces the previously stable flat-metallicity shader behavior while
+    // leaving the mapped-material hook and pass structure installed.
+    float metallicness = 1.0f;
     
     // Lighting.
     float3 viewDir = { IN.lightDir.w, IN.light2.w, IN.light3.w };
@@ -786,29 +811,29 @@ PS_OUTPUT main(PS_INPUT IN) {
                   ? GetSunShadow(sunShadowWorldPos, sunShadowNormal)
                   : 1.0f;
         #endif
-        float3 lighting = getSunLighting(IN.lightDir.xyz, PSLightColor[0].rgb * sunShadow, viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
+        float3 lighting = getSunLighting(IN.lightDir.xyz, PSLightColor[0].rgb * sunShadow, viewDir.xyz, normal.xyz, baseColor.rgb, roughness, metallicness);
     #else
         att = vanillaAtt(PSLightPosition[0].xyz - IN.lPosition.xyz, PSLightPosition[0].w);
-        float3 lighting = getPointLightLightingAtt(IN.lightDir.xyz, att, PSLightColor[0].rgb, viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
+        float3 lighting = getPointLightLightingAtt(IN.lightDir.xyz, att, PSLightColor[0].rgb, viewDir.xyz, normal.xyz, baseColor.rgb, roughness, metallicness);
     #endif
     
     att = vanillaAtt(PSLightPosition[lightOffset + 0].xyz - IN.lPosition.xyz, PSLightPosition[lightOffset + 0].w);
-    lighting += (1 >= lightsUsed ? 0.0 : 1.0) * getPointLightLightingAtt(IN.light2.xyz, att, PSLightColor[1].rgb, viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
+    lighting += (1 >= lightsUsed ? 0.0 : 1.0) * getPointLightLightingAtt(IN.light2.xyz, att, PSLightColor[1].rgb, viewDir.xyz, normal.xyz, baseColor.rgb, roughness, metallicness);
     
     att = vanillaAtt(PSLightPosition[lightOffset + 1].xyz - IN.lPosition.xyz, PSLightPosition[lightOffset + 1].w);
-    lighting += (2 > lightsUsed ? 0.0 : 1.0) * getPointLightLightingAtt(IN.light3.xyz, att, PSLightColor[2].rgb, viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
+    lighting += (2 > lightsUsed ? 0.0 : 1.0) * getPointLightLightingAtt(IN.light3.xyz, att, PSLightColor[2].rgb, viewDir.xyz, normal.xyz, baseColor.rgb, roughness, metallicness);
     
     #if MAX_LIGHTS > 3
         att = vanillaAtt(PSLightPosition[lightOffset + 2].xyz - IN.lPosition.xyz, PSLightPosition[lightOffset + 2].w);
-        lighting += (3 > lightsUsed ? 0.0 : 1.0) * getPointLightLightingAtt(IN.light4.xyz, att, PSLightColor[3].rgb, viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
+        lighting += (3 > lightsUsed ? 0.0 : 1.0) * getPointLightLightingAtt(IN.light4.xyz, att, PSLightColor[3].rgb, viewDir.xyz, normal.xyz, baseColor.rgb, roughness, metallicness);
     #endif
     
     #if MAX_LIGHTS > 4
         att = vanillaAtt(PSLightPosition[3].xyz - IN.lPosition.xyz, PSLightPosition[3].w);
-        lighting += (4 > lightsUsed ? 0.0 : 1.0) * getPointLightLightingAtt(IN.light5.xyz, att, PSLightColor[4].rgb, viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
+        lighting += (4 > lightsUsed ? 0.0 : 1.0) * getPointLightLightingAtt(IN.light5.xyz, att, PSLightColor[4].rgb, viewDir.xyz, normal.xyz, baseColor.rgb, roughness, metallicness);
     
         att = vanillaAtt(PSLightPosition[4].xyz - IN.lPosition.xyz, PSLightPosition[4].w);
-        lighting += (5 > lightsUsed ? 0.0 : 1.0) * getPointLightLightingAtt(IN.light6.xyz, att, PSLightColor[5].rgb, viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
+        lighting += (5 > lightsUsed ? 0.0 : 1.0) * getPointLightLightingAtt(IN.light6.xyz, att, PSLightColor[5].rgb, viewDir.xyz, normal.xyz, baseColor.rgb, roughness, metallicness);
     #endif
     
     // ddx/ddy must stay at pixel-shader top level.
@@ -832,6 +857,10 @@ PS_OUTPUT main(PS_INPUT IN) {
 
     OUT.color.rgb = finalColor.rgb;
     OUT.color.a = baseColor.a * AmbientColor.a;
+
+    // Constant RGBA diagnostic, after alpha assignment.
+    if (TESR_MaterialMetallic.y > 0.5f)
+        OUT.color = 1.0f;
 
     return OUT;
 }

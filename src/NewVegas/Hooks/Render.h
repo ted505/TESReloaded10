@@ -5,6 +5,11 @@ void __fastcall RenderHook(Main* This, UInt32 edx, BSRenderedTexture* RenderedTe
 extern void(__thiscall* SetShaders)(BSShader*, UInt32);
 void __fastcall SetShadersHook(BSShader* This, UInt32 edx, UInt32 PassIndex);
 
+extern void(__cdecl* RenderGeometryPass)(void*, UInt32, int, int, int);
+void __cdecl RenderGeometryPassHook(void* Pass, UInt32 PassEnum, int Arg3, int Arg4, int Arg5);
+
+void AttachMaterialDrawHook();
+
 extern HRESULT(__thiscall* SetSamplerState)(NiDX9RenderState*, UInt32, D3DSAMPLERSTATETYPE, UInt32, UInt8);
 HRESULT __fastcall SetSamplerStateHook(NiDX9RenderState* This, UInt32 edx, UInt32 Sampler, D3DSAMPLERSTATETYPE Type, UInt32 Value, UInt8 Save);
 

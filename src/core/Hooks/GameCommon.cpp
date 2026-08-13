@@ -5,6 +5,7 @@ NiDX9Renderer* __fastcall InitializeRendererHook(NiDX9Renderer* This, UInt32 edx
 
 	TheRenderManager = (RenderManager*)(*InitializeRenderer)(This);
 	TheRenderManager->Initialize();
+	AttachMaterialDrawHook();
 	InitializeManagers();
 	return TheRenderManager;
 
