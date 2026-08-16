@@ -172,8 +172,17 @@ float3 getAmbientLighting(float3 ambient, float3 albedo, float3 worldNormal, flo
     return (flatAmbient + skyTerm * worldNormalValid) * albedo;
 }
 
-// [Shaders.PBR.*] SkylightingSpecularScale. No separate toggle: 0 disables the term.
-#define SKY_SPECULAR_STRENGTH  (TESR_PBRExtraData.w)
+// Both halves take SkylightingScale, deliberately, and there is no second knob.
+//
+// The BRDF is physically based; the radiance feeding it is not. GetSkyColor interpolates
+// weather-authored display colours and scales them by artistic settings, so it carries no
+// radiometric unit -- there is one unknown constant between "the colour the sky dome is painted"
+// and "the radiance arriving at a surface", and SkylightingScale is it. That constant is a
+// property of the light source, so it is the same number for both halves.
+//
+// Splitting it in two would let the diffuse and specular responses of one light source be dialled
+// against each other, which nothing physical can do: how the sky's energy divides between the two
+// is the BRDF's answer, not a setting.
 
 // Ambient with the sky's specular half, for the permutations that carry a view vector.
 //
@@ -181,9 +190,9 @@ float3 getAmbientLighting(float3 ambient, float3 albedo, float3 worldNormal, flo
 // camera-relative, so normalising its negation gives it with no extra interpolator.
 //
 // Metallicness splits the ambient rather than adding to it: a metal has no diffuse response, so
-// its share of the ambient moves into the reflection. Turning SkylightingSpecularScale down to
-// 0 therefore leaves a fully metallic surface with no ambient at all, which is what a metal lit
-// by nothing should look like, but it is a cliff rather than a fade.
+// its share of the ambient moves into the reflection. Turning SkylightingScale down to 0
+// therefore leaves a fully metallic surface with no sky response at all, diffuse or reflected,
+// which is what a metal under no sky should look like.
 float3 getAmbientLighting(float3 ambient, float3 albedo, float3 worldNormal, float worldNormalValid,
                           float3 worldView, float roughness, float metallicness) {
     float3 flatAmbient = ambient * TESR_PBRData.w;
@@ -193,7 +202,7 @@ float3 getAmbientLighting(float3 ambient, float3 albedo, float3 worldNormal, flo
 
     float3 f0 = lerp(float(0.04).rrr, albedo, metallicness);
     float3 specular = SkyAmbientSpecular(worldNormal, worldView, roughness, f0, TESR_PBRExtraData.z)
-                    * SKY_SPECULAR_STRENGTH * worldNormalValid;
+                    * SKY_AMBIENT_STRENGTH * worldNormalValid;
 
     return diffuse + specular;
 }

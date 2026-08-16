@@ -119,7 +119,6 @@ public:
 		float Saturation;
 		float SkylightingScale;
 		float SkylightingDirectionality;
-		float SkylightingSpecularScale;
 	};
 	struct PBRSettingsStruct {
 		PBRSettings Default;

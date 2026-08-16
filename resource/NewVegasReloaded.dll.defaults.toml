@@ -526,7 +526,6 @@ AmbientScale = 1.0                   # Ambient lighting scale.
 SkylightingScale = 1.0               # Sky-colour ambient boost. 0 disables it.
 SkylightingMode = 0                  # 0 spherical harmonics, 1 directional sample. Recompiles shaders.
 SkylightingDirectionality = 0.6      # Mode 1 only: 0 samples straight up, 1 along the normal.
-SkylightingSpecularScale = 1.0       # Sky reflection strength. 0 disables it.
 LightingScale = 1.0                  # Directional and point light scale.
 Saturation = 1.0                     # Color saturation.
 
@@ -536,7 +535,6 @@ Metallicness = 0.0                   # Metalicness scale - unused, no metalic ma
 AmbientScale = 1.0                   # Ambient lighting scale.
 SkylightingScale = 1.0               # Sky-colour ambient boost. 0 disables it.
 SkylightingDirectionality = 0.6      # Mode 1 only: 0 samples straight up, 1 along the normal.
-SkylightingSpecularScale = 1.0       # Sky reflection strength. 0 disables it.
 LightingScale = 1.0                  # Directional and point light scale.
 Saturation = 1.0                     # Color saturation.
 
@@ -546,7 +544,6 @@ Metallicness = 0.0                   # Metalicness scale - unused, no metalic ma
 AmbientScale = 1.0                   # Ambient lighting scale.
 SkylightingScale = 1.0               # Sky-colour ambient boost. 0 disables it.
 SkylightingDirectionality = 0.6      # Mode 1 only: 0 samples straight up, 1 along the normal.
-SkylightingSpecularScale = 1.0       # Sky reflection strength. 0 disables it.
 LightingScale = 1.0                  # Directional and point light scale.
 Saturation = 1.0                     # Color saturation.
 
@@ -556,7 +553,6 @@ Metallicness = 0.0                   # Metalicness scale - unused, no metalic ma
 AmbientScale = 1.0                   # Ambient lighting scale.
 SkylightingScale = 1.0               # Sky-colour ambient boost. 0 disables it.
 SkylightingDirectionality = 0.6      # Mode 1 only: 0 samples straight up, 1 along the normal.
-SkylightingSpecularScale = 1.0       # Sky reflection strength. 0 disables it.
 LightingScale = 1.0                  # Directional and point light scale.
 Saturation = 1.0                     # Color saturation.
 
@@ -566,7 +562,6 @@ Metallicness = 0.0                   # Metalicness scale - unused, no metalic ma
 AmbientScale = 1.0                   # Ambient lighting scale.
 SkylightingScale = 0.0               # Sky-colour ambient boost. Off indoors: the coefficients describe the exterior sky.
 SkylightingDirectionality = 0.6      # Mode 1 only: 0 samples straight up, 1 along the normal.
-SkylightingSpecularScale = 1.0       # Sky reflection strength. 0 disables it.
 LightingScale = 1.0                  # Directional and point light scale.
 Saturation = 1.0                     # Color saturation.
 
