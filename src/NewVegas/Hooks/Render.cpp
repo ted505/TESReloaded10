@@ -233,6 +233,24 @@ static HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveHook(IDirect3DDevice9* Devi
 	Device->SetTexture(MetallicSampler, metallic);
 	Device->SetPixelShaderConstantF(MaterialMetallicRegister, metallicPresent, 1);
 	if (splitSpecular) {
+		// The alias must sample the way the engine samples this same texture in the passes that
+		// bind it normally, or the two decompositions disagree on albedo -- and at metallicness 1
+		// reflectance IS the albedo, so that disagreement is the whole surface. sRGB is the one
+		// that matters: it is a gamma-2.2 difference, not a rounding one. Report the engine's own
+		// state once so the correct value is measured rather than assumed.
+		{
+			DWORD engineSrgb = 0, engineMag = 0, engineAddrU = 0;
+			Device->GetSamplerState(0, D3DSAMP_SRGBTEXTURE, &engineSrgb);
+			Device->GetSamplerState(0, D3DSAMP_MAGFILTER, &engineMag);
+			Device->GetSamplerState(0, D3DSAMP_ADDRESSU, &engineAddrU);
+			static bool reportedSamplerState = false;
+			if (!reportedSamplerState) {
+				reportedSamplerState = true;
+				Logger::Log("SPLITALBEDO engine s0 srgb=%u mag=%u addrU=%u | alias s8 srgb=1 mag=%u addrU=%u",
+					engineSrgb, engineMag, engineAddrU,
+					(UInt32)D3DTEXF_ANISOTROPIC, (UInt32)D3DTADDRESS_WRAP);
+			}
+		}
 		Device->SetTexture(SplitSpecularAlbedoSampler, splitAlbedo);
 		Device->SetSamplerState(SplitSpecularAlbedoSampler, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
 		Device->SetSamplerState(SplitSpecularAlbedoSampler, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
