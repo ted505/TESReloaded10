@@ -161,12 +161,40 @@ static HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveHook(IDirect3DDevice9* Devi
 	// metallicness the albedo IS the specular colour, and a pass that cannot see it renders
 	// white. The engine re-decomposes lighting per draw as the light set changes, so the same
 	// surface alternates between albedo-tinted and white specular from one frame to the next.
-	const bool splitSpecular = IsSplitSpecularPass(ActiveMaterialPassEnum);
+	//
+	// Mapped geometry is bound unconditionally rather than only on a recognised pass enum.
+	// IsSplitSpecularPass is a guessed contiguous window; the parallax ONLY_SPECULAR
+	// permutations (PAR2024-PAR2028) were never confirmed to sit inside it, and a split pass
+	// that falls outside still samples s8 -- it just samples it unbound. Binding for the whole
+	// material costs one redundant SetTexture on its non-split passes, where s8 is declared by
+	// no permutation and therefore never read. The enum test stays as a union term so unmapped
+	// geometry still gets albedo when metallicness comes from the global setting instead.
+	const bool splitSpecular = metallic || IsSplitSpecularPass(ActiveMaterialPassEnum);
 	IDirect3DBaseTexture9* splitAlbedo = splitSpecular ? GetGeometryDiffuseTexture(geometry) : nullptr;
 	if (splitSpecular) {
 		Device->GetTexture(SplitSpecularAlbedoSampler, &previousSplitAlbedo);
 		for (int i = 0; i < 6; i++)
 			Device->GetSamplerState(SplitSpecularAlbedoSampler, samplerTypes[i], &previousSplitAlbedoSampler[i]);
+	}
+
+	// Every pass a mapped material is drawn with, and whether the albedo reached it. A pass that
+	// reports albedo=0 renders reflectance white instead of the diffuse colour, which is the
+	// difference between a metal highlight tinted by the surface and one tinted by the sun.
+	// Distinct combinations only, so a camera sweep stays readable.
+	if (metallic) {
+		NiD3DPass* pass = *(NiD3DPass**)0x0126F74C;
+		const char* ps = pass && pass->PixelShader && pass->PixelShader->Name
+			? pass->PixelShader->Name : "(unknown)";
+		char key[160];
+		sprintf_s(key, "%u|%s|%d", ActiveMaterialPassEnum, ps, splitAlbedo ? 1 : 0);
+		static std::map<std::string, bool> seenAlbedoStates;
+		if (!seenAlbedoStates[key]) {
+			seenAlbedoStates[key] = true;
+			Logger::Log("METALALBEDO enum=%u ps=%s desc=%s albedo=%d inEnumWindow=%d",
+				ActiveMaterialPassEnum, ps,
+				Pointers::Functions::GetPassDescription(ActiveMaterialPassEnum),
+				splitAlbedo ? 1 : 0, IsSplitSpecularPass(ActiveMaterialPassEnum) ? 1 : 0);
+		}
 	}
 
 	// Diagnose the saloon test material's complete draw composition. Log only distinct state
