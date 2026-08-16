@@ -693,6 +693,54 @@ PS_OUTPUT main(PS_INPUT IN) {
     if (TESR_MaterialMetallic.y > 0.5f)
         OUT.color = 1.0f;
 
+    // --- Metal decomposition diagnostics ------------------------------------------------
+    // [_Main.Develop.Main] DebugVar1. Mapped materials only, so the rest of the scene stays
+    // readable and the metal is easy to pick out.
+    //   1  permutation class as a flat colour
+    //   2  the sun specular term, from whichever pass owns it
+    //   3  reflectance, lerp(0.04, albedo, metallicness), same gating as 2
+    //
+    // Modes 2 and 3 make the two decompositions directly comparable. Exactly one pass per
+    // frame owns the sun specular; every other pass of the material returns black, which is
+    // the identity for the additive blends and annihilates the TEXTURE_Vc multiply, so
+    // whichever decomposition the engine chose the owner's value reaches the screen
+    // untouched. Two states that disagree are then disagreeing on the term itself.
+    #if defined(ONLY_SPECULAR) && !defined(POINT)
+        #define SUN_SPEC_OWNER 1
+    #elif defined(SPECULAR) && !defined(DIFFUSE) && !defined(POINT)
+        #define SUN_SPEC_OWNER 1
+    #else
+        #define SUN_SPEC_OWNER 0
+    #endif
+
+    if (TESR_MaterialMetallic.x > 0.5f && TESR_DebugVar.x > 0.5f) {
+        float3 debugColor = 0.0f;
+        if (TESR_DebugVar.x < 1.5f) {
+            #if defined(ONLY_SPECULAR)
+                debugColor = float3(1, 0, 0);   // split specular
+            #elif defined(SPECULAR)
+                debugColor = float3(0, 1, 0);   // combined lighting + specular
+            #elif defined(ONLY_LIGHT)
+                debugColor = float3(0, 0, 1);   // lighting only, texture applied by a later pass
+            #elif defined(DIFFUSE)
+                debugColor = float3(1, 1, 0);   // split diffuse
+            #else
+                debugColor = float3(1, 1, 1);   // self-contained
+            #endif
+        }
+        #if SUN_SPEC_OWNER
+        else if (TESR_DebugVar.x < 2.5f) {
+            debugColor = PBRSunSpecular(metallicness, roughness, baseColor.rgb, normal.xyz,
+                                        IN.viewDir.xyz, IN.lightDir.xyz,
+                                        PSLightColor[0].rgb * shadowMultiplier);
+        } else {
+            debugColor = lerp(float(0.04).rrr, baseColor.rgb, metallicness);
+        }
+        #endif
+        OUT.color.rgb = debugColor;
+    }
+    #undef SUN_SPEC_OWNER
+
     return OUT;
 }
 
@@ -866,6 +914,37 @@ PS_OUTPUT main(PS_INPUT IN) {
     // Constant RGBA diagnostic, after alpha assignment.
     if (TESR_MaterialMetallic.y > 0.5f)
         OUT.color = 1.0f;
+
+    // Metal decomposition diagnostics -- see the LIGHTS < 4 variant for what the modes mean.
+    // This body has no ONLY_SPECULAR permutations, and with OPT the first light slot is a
+    // point light rather than the sun, so SPECULAR without OPT is the only owner here.
+    #if !defined(OPT) && defined(SPECULAR)
+        #define SUN_SPEC_OWNER 1
+    #else
+        #define SUN_SPEC_OWNER 0
+    #endif
+
+    if (TESR_MaterialMetallic.x > 0.5f && TESR_DebugVar.x > 0.5f) {
+        float3 debugColor = 0.0f;
+        if (TESR_DebugVar.x < 1.5f) {
+            #if defined(SPECULAR)
+                debugColor = float3(0, 1, 0);   // combined lighting + specular
+            #else
+                debugColor = float3(1, 0, 1);   // combined, no specular flag
+            #endif
+        }
+        #if SUN_SPEC_OWNER
+        else if (TESR_DebugVar.x < 2.5f) {
+            debugColor = PBRSunSpecular(metallicness, roughness, baseColor.rgb, normal.xyz,
+                                        viewDir, IN.lightDir.xyz,
+                                        PSLightColor[0].rgb * sunShadow);
+        } else {
+            debugColor = lerp(float(0.04).rrr, baseColor.rgb, metallicness);
+        }
+        #endif
+        OUT.color.rgb = debugColor;
+    }
+    #undef SUN_SPEC_OWNER
 
     return OUT;
 }
