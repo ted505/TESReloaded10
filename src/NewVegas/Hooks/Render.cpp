@@ -51,6 +51,13 @@ namespace {
 	static const UInt32 PPLightingPropertyVtable = 0x010AE0D0;
 	static const UInt32 SplitSpecularAlbedoSampler = 8;
 	static const UInt32 MetallicSampler = 15;
+
+	// TESR_MaterialMetallic's register, and it must track the declaration in
+	// Shaders\Includes\Object.hlsl by hand. This is a RAW per-draw write, not the name-bound
+	// RegisterConstant path in ShaderManager, so the constant table cannot redirect it: point it
+	// at the wrong slot and it silently overwrites whatever else lives there. c137 upward belongs
+	// to SkyAmbient.hlsl (nine float4s for TESR_SkyIrradiance[9] in mode 0).
+	static const UInt32 MaterialMetallicRegister = 136;
 	static std::map<std::string, IDirect3DBaseTexture9*> MetallicTextureCache;
 	static NiGeometry* ActiveMaterialGeometry = nullptr;
 	static UInt32 ActiveMaterialPassEnum = 0;
@@ -141,12 +148,20 @@ static HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveHook(IDirect3DDevice9* Devi
 		D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE
 	};
 	Device->GetTexture(MetallicSampler, &previousTexture);
-	Device->GetPixelShaderConstantF(139, previousConstant, 1);
+	Device->GetPixelShaderConstantF(MaterialMetallicRegister, previousConstant, 1);
 	for (int i = 0; i < 6; i++)
 		Device->GetSamplerState(MetallicSampler, samplerTypes[i], &previousSampler[i]);
 
 	IDirect3DBaseTexture9* metallic = GetGeometryMetallicTexture(geometry);
-	const bool splitSpecular = metallic && IsSplitSpecularPass(ActiveMaterialPassEnum);
+
+	// Every split-specular draw needs the albedo, whether or not the geometry carries a metallic
+	// map. The engine's ONLY_SPECULAR permutations bind NormalMap to s0 and no diffuse at all,
+	// because vanilla specular is gloss * pow(NdotH, p) -- a colourless highlight that never
+	// looks at albedo. PBR reflectance is lerp(0.04, albedo, metallicness), so at high
+	// metallicness the albedo IS the specular colour, and a pass that cannot see it renders
+	// white. The engine re-decomposes lighting per draw as the light set changes, so the same
+	// surface alternates between albedo-tinted and white specular from one frame to the next.
+	const bool splitSpecular = IsSplitSpecularPass(ActiveMaterialPassEnum);
 	IDirect3DBaseTexture9* splitAlbedo = splitSpecular ? GetGeometryDiffuseTexture(geometry) : nullptr;
 	if (splitSpecular) {
 		Device->GetTexture(SplitSpecularAlbedoSampler, &previousSplitAlbedo);
@@ -203,17 +218,20 @@ static HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveHook(IDirect3DDevice9* Devi
 		}
 	}
 
-	// .y enables the raw-mask diagnostic for mapped materials. This deliberately bypasses
-	// lighting in the replacement shader so angular changes can only come from binding,
-	// UV/sampling, or pass selection—not the BRDF or shadows.
+	// .x metallic map bound to s15. .y enables the raw-mask diagnostic for mapped materials,
+	// which deliberately bypasses lighting in the replacement shader so angular changes can only
+	// come from binding, UV/sampling, or pass selection -- not the BRDF or shadows. .z albedo
+	// bound to s8, which answers a different question than .x: a split-specular draw needs the
+	// albedo regardless of whether the material has a metallic map, and GetGeometryDiffuseTexture
+	// can still come back empty for geometry whose diffuse has not been realised.
 	float metallicPresent[4] = {
 		metallic ? 1.0f : 0.0f,
 		0.0f,
-		0.0f,
+		splitAlbedo ? 1.0f : 0.0f,
 		0.0f
 	};
 	Device->SetTexture(MetallicSampler, metallic);
-	Device->SetPixelShaderConstantF(139, metallicPresent, 1);
+	Device->SetPixelShaderConstantF(MaterialMetallicRegister, metallicPresent, 1);
 	if (splitSpecular) {
 		Device->SetTexture(SplitSpecularAlbedoSampler, splitAlbedo);
 		Device->SetSamplerState(SplitSpecularAlbedoSampler, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
@@ -236,7 +254,7 @@ static HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveHook(IDirect3DDevice9* Devi
 		MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
 
 	Device->SetTexture(MetallicSampler, previousTexture);
-	Device->SetPixelShaderConstantF(139, previousConstant, 1);
+	Device->SetPixelShaderConstantF(MaterialMetallicRegister, previousConstant, 1);
 	for (int i = 0; i < 6; i++)
 		Device->SetSamplerState(MetallicSampler, samplerTypes[i], previousSampler[i]);
 	if (splitSpecular) {

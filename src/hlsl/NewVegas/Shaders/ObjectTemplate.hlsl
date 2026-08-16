@@ -574,9 +574,14 @@ PS_OUTPUT main(PS_INPUT IN) {
     // leaving the mapped-material hook and pass structure installed.
     float metallicness = 1.0f;
 
+    // baseColor is 1 here: the engine binds no diffuse to a split-specular pass. Reflectance is
+    // lerp(0.04, albedo, metallicness), so leaving it at 1 renders metal as a white mirror while
+    // the combined-specular permutations of the same surface use the real albedo -- and the
+    // engine swaps between the two decompositions as the light set changes. .z, not .x: the
+    // albedo is aliased for every split-specular draw, not only for mapped materials.
     #if defined(ONLY_SPECULAR)
         baseColor.rgb = lerp(baseColor.rgb, tex2D(SplitSpecularAlbedoMap, IN.uv.xy).rgb,
-                             TESR_MaterialMetallic.x);
+                             TESR_MaterialMetallic.z);
     #endif
 
     //if (TESR_DebugVar.x > 0.0)

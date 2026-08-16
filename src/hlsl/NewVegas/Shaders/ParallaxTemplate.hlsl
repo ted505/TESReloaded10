@@ -309,6 +309,13 @@ struct PS_OUTPUT {
 
 sampler2D MetallicMap : register(s15);
 
+#if defined(ONLY_SPECULAR)
+    // Matches ObjectTemplate: the split specular path has NormalMap in s0 and no material
+    // albedo. Parallax tops out at s7 and the shadow atlas is s9, so s8 is free here too. The
+    // draw hook aliases the already-loaded diffuse texture for every split-specular draw.
+    sampler2D SplitSpecularAlbedoMap : register(s8);
+#endif
+
 #if !defined(DIFFUSE) && !defined(ONLY_SPECULAR)
     #if !defined(NO_LIGHT)
         float4 AmbientColor : register(c1);
@@ -397,12 +404,21 @@ PS_OUTPUT main(PS_INPUT IN)
 
     #if !defined(DIFFUSE) && !defined(ONLY_SPECULAR)
         float4 baseColor = tex2D(BaseMap, offsetUV.xy);
-    
+
         #if defined(ONLY_LIGHT)
             baseColor.rgb = 1.f;
         #endif
     #else
         float4 baseColor = 1.f;
+    #endif
+
+    // Reflectance is lerp(0.04, albedo, metallicness), so a split-specular pass left at
+    // baseColor 1 renders metal white while the combined permutations of the same surface use
+    // the real albedo. offsetUV, not IN.uv: the albedo has to land on the same parallax-shifted
+    // texel the normal and height came from.
+    #if defined(ONLY_SPECULAR)
+        baseColor.rgb = lerp(baseColor.rgb, tex2D(SplitSpecularAlbedoMap, offsetUV.xy).rgb,
+                             TESR_MaterialMetallic.z);
     #endif
     
     // Vertex color.
