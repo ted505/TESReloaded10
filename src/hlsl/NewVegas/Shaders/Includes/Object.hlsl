@@ -37,8 +37,13 @@ float getMappedRoughness(float roughnessChannel) {
 // Where a map is bound it overrides both vanilla sources: G replaces the roughness derived from
 // the normal map's alpha gloss mask, and B replaces the flat global Metallicness. Where none is
 // bound TESR_MaterialMetallic.x is 0 and both fall back untouched.
+//
+// Roughness has its own gate in .w, because a file can supply metallic without supplying
+// roughness: a plain greyscale metal mask expands to RGB with green equal to red, so reading G
+// off one would overwrite the normal map's gloss with the metal mask. The draw hook settles that
+// per file when the texture loads, not per frame.
 void getMaterialSurface(float4 materialMap, float gloss, out float roughness, out float metallicness) {
-    roughness    = lerp(getRoughness(gloss), getMappedRoughness(materialMap.g), TESR_MaterialMetallic.x);
+    roughness    = lerp(getRoughness(gloss), getMappedRoughness(materialMap.g), TESR_MaterialMetallic.w);
     metallicness = lerp(TESR_PBRData.x, materialMap.b, TESR_MaterialMetallic.x);
 }
 

@@ -58,7 +58,14 @@ namespace {
 	// at the wrong slot and it silently overwrites whatever else lives there. c137 upward belongs
 	// to SkyAmbient.hlsl (nine float4s for TESR_SkyIrradiance[9] in mode 0).
 	static const UInt32 MaterialMetallicRegister = 136;
-	static std::map<std::string, IDirect3DBaseTexture9*> MetallicTextureCache;
+
+	// Whether the map's green channel carries roughness is a property of the file, so it is
+	// settled once when the texture is first loaded and cached with it.
+	struct MetallicMap {
+		IDirect3DBaseTexture9*	texture;
+		bool					hasRoughness;
+	};
+	static std::map<std::string, MetallicMap> MetallicTextureCache;
 	static NiGeometry* ActiveMaterialGeometry = nullptr;
 	static UInt32 ActiveMaterialPassEnum = 0;
 	static bool MaterialDrawHookAttached = false;
@@ -82,27 +89,72 @@ namespace {
 		return path + "_metal.dds";
 	}
 
-	static IDirect3DBaseTexture9* GetGeometryMetallicTexture(NiGeometry* Geometry) {
-		if (!Geometry) return nullptr;
+	// Does green carry roughness, or is the file only a metal mask?
+	//
+	// Checking the format is not enough. The usual case is a greyscale mask, which D3DX expands
+	// to RGB with green equal to red -- a green channel in the format sense, carrying nothing.
+	// So the question is whether green ever departs from red. The tolerance covers DXT
+	// quantisation: DXT1 gives green six bits against red's five, so a nominally grey texel can
+	// differ by a few counts.
+	//
+	// Runs once per file, behind the texture cache.
+	static bool HasRoughnessChannel(const std::string& Path) {
+		// SCRATCH costs no device memory and is always lockable, A8R8G8B8 decompresses whatever
+		// the source is, and the fixed small size bounds the scan. Downsampling is safe here: it
+		// cannot manufacture a difference between two channels that are equal everywhere.
+		const UINT probeSize = 64;
+		IDirect3DTexture9* probe = nullptr;
+		if (FAILED(D3DXCreateTextureFromFileExA(TheRenderManager->device, Path.c_str(),
+				probeSize, probeSize, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_SCRATCH,
+				D3DX_FILTER_BOX, D3DX_FILTER_NONE, 0, nullptr, nullptr, &probe)) || !probe)
+			return false;
+
+		bool independent = false;
+		D3DLOCKED_RECT rect;
+		if (SUCCEEDED(probe->LockRect(0, &rect, nullptr, D3DLOCK_READONLY))) {
+			const UInt8* rows = static_cast<const UInt8*>(rect.pBits);
+			for (UINT y = 0; y < probeSize && !independent; y++) {
+				const UInt8* px = rows + y * rect.Pitch;
+				for (UINT x = 0; x < probeSize; x++, px += 4) {
+					// A8R8G8B8 is BGRA in memory.
+					int delta = (int)px[1] - (int)px[2];
+					if (delta > 12 || delta < -12) { independent = true; break; }
+				}
+			}
+			probe->UnlockRect(0);
+		}
+		probe->Release();
+		return independent;
+	}
+
+	static MetallicMap GetGeometryMetallicMap(NiGeometry* Geometry) {
+		const MetallicMap none = { nullptr, false };
+		if (!Geometry) return none;
 		NiProperty* shade = Geometry->GetProperty(NiProperty::kType_Shade);
-		if (!shade || *(UInt32*)shade != PPLightingPropertyVtable) return nullptr;
+		if (!shade || *(UInt32*)shade != PPLightingPropertyVtable) return none;
 
 		BSShaderPPLightingProperty* pp = static_cast<BSShaderPPLightingProperty*>(shade);
 		RuntimeShaderTextureSet* set = reinterpret_cast<RuntimeShaderTextureSet*>(pp->spTextureSet);
-		if (!set) return nullptr;
+		if (!set) return none;
 
 		std::string path = GetMetallicPath(set->paths[0].data);
-		if (path.empty()) return nullptr;
+		if (path.empty()) return none;
 		std::string key = path;
 		std::transform(key.begin(), key.end(), key.begin(), ::tolower);
 		auto found = MetallicTextureCache.find(key);
 		if (found != MetallicTextureCache.end()) return found->second;
 
-		IDirect3DBaseTexture9* texture = nullptr;
-		if (std::filesystem::exists(path))
-			texture = TheTextureManager->GetFileTexture(path, TextureRecord::PlanarBuffer);
-		MetallicTextureCache[key] = texture;
-		return texture;
+		MetallicMap entry = none;
+		if (std::filesystem::exists(path)) {
+			entry.texture = TheTextureManager->GetFileTexture(path, TextureRecord::PlanarBuffer);
+			if (entry.texture) {
+				entry.hasRoughness = HasRoughnessChannel(path);
+				Logger::Log("Metallic map %s : roughness %s", path.c_str(), entry.hasRoughness
+					? "from green" : "absent, keeping the normal map gloss");
+			}
+		}
+		MetallicTextureCache[key] = entry;
+		return entry;
 	}
 
 	static IDirect3DBaseTexture9* GetGeometryDiffuseTexture(NiGeometry* Geometry) {
@@ -152,7 +204,8 @@ static HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveHook(IDirect3DDevice9* Devi
 	for (int i = 0; i < 6; i++)
 		Device->GetSamplerState(MetallicSampler, samplerTypes[i], &previousSampler[i]);
 
-	IDirect3DBaseTexture9* metallic = GetGeometryMetallicTexture(geometry);
+	MetallicMap material = GetGeometryMetallicMap(geometry);
+	IDirect3DBaseTexture9* metallic = material.texture;
 
 	// Every split-specular draw needs the albedo, whether or not the geometry carries a metallic
 	// map. The engine's ONLY_SPECULAR permutations bind NormalMap to s0 and no diffuse at all,
@@ -251,12 +304,13 @@ static HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveHook(IDirect3DDevice9* Devi
 	// come from binding, UV/sampling, or pass selection -- not the BRDF or shadows. .z albedo
 	// bound to s8, which answers a different question than .x: a split-specular draw needs the
 	// albedo regardless of whether the material has a metallic map, and GetGeometryDiffuseTexture
-	// can still come back empty for geometry whose diffuse has not been realised.
+	// can still come back empty for geometry whose diffuse has not been realised. .w green
+	// carries roughness, settled once per file at load.
 	float metallicPresent[4] = {
 		metallic ? 1.0f : 0.0f,
 		0.0f,
 		splitAlbedo ? 1.0f : 0.0f,
-		0.0f
+		(metallic && material.hasRoughness) ? 1.0f : 0.0f
 	};
 	Device->SetTexture(MetallicSampler, metallic);
 	Device->SetPixelShaderConstantF(MaterialMetallicRegister, metallicPresent, 1);
