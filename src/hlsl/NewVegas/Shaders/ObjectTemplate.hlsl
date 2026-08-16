@@ -699,6 +699,10 @@ PS_OUTPUT main(PS_INPUT IN) {
     //   1  permutation class as a flat colour
     //   2  the sun specular term, from whichever pass owns it
     //   3  reflectance, lerp(0.04, albedo, metallicness), same gating as 2
+    //   4  the two inputs to 3: r the metallic map's presence flag, g the metallicness it
+    //      actually sampled, b the split albedo's bound flag. White is everything arriving,
+    //      and each dark channel names which one did not.
+    //   5  the albedo the pass actually holds
     //
     // Modes 2 and 3 make the two decompositions directly comparable. Exactly one pass per
     // frame owns the sun specular; every other pass of the material returns black, which is
@@ -733,8 +737,12 @@ PS_OUTPUT main(PS_INPUT IN) {
             debugColor = PBRSunSpecular(metallicness, roughness, baseColor.rgb, normal.xyz,
                                         IN.viewDir.xyz, IN.lightDir.xyz,
                                         PSLightColor[0].rgb * shadowMultiplier);
-        } else {
+        } else if (TESR_DebugVar.x < 3.5f) {
             debugColor = lerp(float(0.04).rrr, baseColor.rgb, metallicness);
+        } else if (TESR_DebugVar.x < 4.5f) {
+            debugColor = float3(TESR_MaterialMetallic.x, metallicness, TESR_MaterialMetallic.z);
+        } else {
+            debugColor = baseColor.rgb;
         }
         #endif
         OUT.color.rgb = debugColor;
@@ -938,8 +946,12 @@ PS_OUTPUT main(PS_INPUT IN) {
             debugColor = PBRSunSpecular(metallicness, roughness, baseColor.rgb, normal.xyz,
                                         viewDir, IN.lightDir.xyz,
                                         PSLightColor[0].rgb * sunShadow);
-        } else {
+        } else if (TESR_DebugVar.x < 3.5f) {
             debugColor = lerp(float(0.04).rrr, baseColor.rgb, metallicness);
+        } else if (TESR_DebugVar.x < 4.5f) {
+            debugColor = float3(TESR_MaterialMetallic.x, metallicness, TESR_MaterialMetallic.z);
+        } else {
+            debugColor = baseColor.rgb;
         }
         #endif
         OUT.color.rgb = debugColor;
