@@ -646,6 +646,17 @@ PS_OUTPUT main(PS_INPUT IN) {
         // Pointlights only.
         float3 lighting = getPointLightLighting(IN.lightDir.xyz, IN.lightDir.w, PSLightColor[0].rgb * shadowMultiplier, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness, metallicness);
     #endif
+
+    // The split decomposition's share of the sky reflection. It cannot come from the ONLY_LIGHT
+    // base pass, whose output the texture multiply would tint a second time, so it rides here
+    // instead -- additive, past that multiply, and holding the real albedo through the s8 alias.
+    // Non-POINT only, so exactly one pass of the decomposition contributes it, the same rule the
+    // sun above follows.
+    #if defined(ONLY_SPECULAR) && !defined(POINT)
+        lighting += getSkyReflection(baseColor.rgb, sunShadowNormal,
+                                     SHADOW_VS_PRESENT(IN.shadowWorldPos.w) ? 1.0f : 0.0f,
+                                     normalize(-IN.shadowWorldPos.xyz), roughness, metallicness);
+    #endif
     
     // Self emmitance.
     #ifdef SI

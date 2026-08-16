@@ -512,6 +512,14 @@ PS_OUTPUT main(PS_INPUT IN)
             else
                 lighting += baseColor.rgb * AmbientColor.rgb;
         #endif
+
+        // See ObjectTemplate: the reflection cannot ride the ONLY_LIGHT base pass, whose output
+        // the texture multiply would tint a second time, so the split decomposition adds it from
+        // its ONLY_SPECULAR pass. Non-POINT only, so exactly one pass contributes it.
+        #if defined(ONLY_SPECULAR) && !defined(POINT)
+            lighting += getSkyReflection(baseColor.rgb, sunShadowNormal, shadowWorldPosValid,
+                                         normalize(-IN.shadowWorldPos.xyz), roughness, metallicness);
+        #endif
     
         // Other light sources.
         #if LIGHTS > 1

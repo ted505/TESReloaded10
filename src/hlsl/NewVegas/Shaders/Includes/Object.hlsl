@@ -184,15 +184,33 @@ float3 getAmbientLighting(float3 ambient, float3 albedo, float3 worldNormal, flo
 // against each other, which nothing physical can do: how the sky's energy divides between the two
 // is the BRDF's answer, not a setting.
 
-// Ambient with the sky's specular half, for the permutations that carry a view vector.
+// What the surface reflects of the sky.
+//
+// This must be added where the TEXTURE_Vc multiply cannot reach it. An ONLY_LIGHT pass lights a
+// white surface and has its whole output multiplied by the texture afterwards, which is right
+// for the diffuse ambient and wrong for a reflection: reflectance already carries the albedo
+// through f0, so passing through that multiply applies it a second time. At metallicness 0 that
+// is the entire dielectric reflection tinted by albedo in one decomposition and left alone in
+// the other, which pops on every surface, not just metal.
+//
+// So it belongs to the passes nothing multiplies: the self-contained combined ones, and the
+// additive ONLY_SPECULAR ones, which carry the real albedo through the s8 alias.
 //
 // worldView points from the surface toward the camera. The carried shadow world position is
 // camera-relative, so normalising its negation gives it with no extra interpolator.
+float3 getSkyReflection(float3 albedo, float3 worldNormal, float worldNormalValid,
+                        float3 worldView, float roughness, float metallicness) {
+    float3 f0 = lerp(float(0.04).rrr, albedo, metallicness);
+    return SkyAmbientSpecular(worldNormal, worldView, roughness, f0, TESR_PBRExtraData.z)
+         * SKY_AMBIENT_STRENGTH * worldNormalValid;
+}
+
+// Ambient for the permutations that carry a view vector.
 //
-// Metallicness splits the ambient rather than adding to it: a metal has no diffuse response, so
-// its share of the ambient moves into the reflection. Turning SkylightingScale down to 0
-// therefore leaves a fully metallic surface with no sky response at all, diffuse or reflected,
-// which is what a metal under no sky should look like.
+// Metallicness splits the ambient rather than the reflection being added on top: a metal has no
+// diffuse response, so its share moves to getSkyReflection instead of being counted twice.
+// Turning SkylightingScale down to 0 therefore leaves a fully metallic surface with no sky
+// response at all, diffuse or reflected, which is what a metal under no sky should look like.
 float3 getAmbientLighting(float3 ambient, float3 albedo, float3 worldNormal, float worldNormalValid,
                           float3 worldView, float roughness, float metallicness) {
     float3 flatAmbient = ambient * TESR_PBRData.w;
@@ -200,9 +218,12 @@ float3 getAmbientLighting(float3 ambient, float3 albedo, float3 worldNormal, flo
 
     float3 diffuse = (flatAmbient + skyTerm * worldNormalValid) * albedo * (1.0f - metallicness);
 
-    float3 f0 = lerp(float(0.04).rrr, albedo, metallicness);
-    float3 specular = SkyAmbientSpecular(worldNormal, worldView, roughness, f0, TESR_PBRExtraData.z)
-                    * SKY_AMBIENT_STRENGTH * worldNormalValid;
-
-    return diffuse + specular;
+    // An ONLY_LIGHT pass is multiplied by the texture afterwards, so the reflection cannot ride
+    // along here. The split decomposition adds it from its ONLY_SPECULAR pass instead.
+    #if defined(ONLY_LIGHT)
+        return diffuse;
+    #else
+        return diffuse + getSkyReflection(albedo, worldNormal, worldNormalValid,
+                                          worldView, roughness, metallicness);
+    #endif
 }
