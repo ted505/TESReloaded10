@@ -233,31 +233,19 @@ static HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveHook(IDirect3DDevice9* Devi
 	Device->SetTexture(MetallicSampler, metallic);
 	Device->SetPixelShaderConstantF(MaterialMetallicRegister, metallicPresent, 1);
 	if (splitSpecular) {
-		// The alias must sample the way the engine samples this same texture in the passes that
-		// bind it normally, or the two decompositions disagree on albedo -- and at metallicness 1
-		// reflectance IS the albedo, so that disagreement is the whole surface. sRGB is the one
-		// that matters: it is a gamma-2.2 difference, not a rounding one. Report the engine's own
-		// state once so the correct value is measured rather than assumed.
-		{
-			DWORD engineSrgb = 0, engineMag = 0, engineAddrU = 0;
-			Device->GetSamplerState(0, D3DSAMP_SRGBTEXTURE, &engineSrgb);
-			Device->GetSamplerState(0, D3DSAMP_MAGFILTER, &engineMag);
-			Device->GetSamplerState(0, D3DSAMP_ADDRESSU, &engineAddrU);
-			static bool reportedSamplerState = false;
-			if (!reportedSamplerState) {
-				reportedSamplerState = true;
-				Logger::Log("SPLITALBEDO engine s0 srgb=%u mag=%u addrU=%u | alias s8 srgb=1 mag=%u addrU=%u",
-					engineSrgb, engineMag, engineAddrU,
-					(UInt32)D3DTEXF_ANISOTROPIC, (UInt32)D3DTADDRESS_WRAP);
-			}
+		// Mirror the engine's own sampler rather than restating it. The alias has to sample the
+		// way the engine samples this same texture where it binds it normally, because at
+		// metallicness 1 reflectance IS the albedo: any disagreement between the split and
+		// combined decompositions is the entire surface, not a correction to it. Hardcoding got
+		// D3DSAMP_SRGBTEXTURE wrong -- the engine samples raw and the alias linearised, handing
+		// the split pass albedo^2.2 and making metal jump in brightness whenever the engine
+		// re-decomposed the lighting. Copying leaves nothing to drift out of step.
+		for (int i = 0; i < 6; i++) {
+			DWORD engineState = 0;
+			Device->GetSamplerState(0, samplerTypes[i], &engineState);
+			Device->SetSamplerState(SplitSpecularAlbedoSampler, samplerTypes[i], engineState);
 		}
 		Device->SetTexture(SplitSpecularAlbedoSampler, splitAlbedo);
-		Device->SetSamplerState(SplitSpecularAlbedoSampler, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
-		Device->SetSamplerState(SplitSpecularAlbedoSampler, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
-		Device->SetSamplerState(SplitSpecularAlbedoSampler, D3DSAMP_MAGFILTER, D3DTEXF_ANISOTROPIC);
-		Device->SetSamplerState(SplitSpecularAlbedoSampler, D3DSAMP_MINFILTER, D3DTEXF_ANISOTROPIC);
-		Device->SetSamplerState(SplitSpecularAlbedoSampler, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
-		Device->SetSamplerState(SplitSpecularAlbedoSampler, D3DSAMP_SRGBTEXTURE, 1);
 	}
 	if (metallic) {
 		Device->SetSamplerState(MetallicSampler, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
