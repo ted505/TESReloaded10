@@ -14,6 +14,7 @@ void PBRShaders::UpdateSettings() {
 	Settings.Default.AmbientScale = TheSettingManager->GetSettingF("Shaders.PBR.Main", "AmbientScale");
 	Settings.Default.SkylightingScale = TheSettingManager->GetSettingF("Shaders.PBR.Main", "SkylightingScale");
 	Settings.Default.SkylightingDirectionality = TheSettingManager->GetSettingF("Shaders.PBR.Main", "SkylightingDirectionality");
+	Settings.Default.SkylightingSpecularScale = TheSettingManager->GetSettingF("Shaders.PBR.Main", "SkylightingSpecularScale");
 
 	Settings.Rain.Saturation = TheSettingManager->GetSettingF("Shaders.PBR.Rain", "Saturation");
 	Settings.Rain.Metallicness = TheSettingManager->GetSettingF("Shaders.PBR.Rain", "Metallicness");
@@ -22,6 +23,7 @@ void PBRShaders::UpdateSettings() {
 	Settings.Rain.AmbientScale = TheSettingManager->GetSettingF("Shaders.PBR.Rain", "AmbientScale");
 	Settings.Rain.SkylightingScale = TheSettingManager->GetSettingF("Shaders.PBR.Rain", "SkylightingScale");
 	Settings.Rain.SkylightingDirectionality = TheSettingManager->GetSettingF("Shaders.PBR.Rain", "SkylightingDirectionality");
+	Settings.Rain.SkylightingSpecularScale = TheSettingManager->GetSettingF("Shaders.PBR.Rain", "SkylightingSpecularScale");
 
 	Settings.Night.Saturation = TheSettingManager->GetSettingF("Shaders.PBR.Night", "Saturation");
 	Settings.Night.Metallicness = TheSettingManager->GetSettingF("Shaders.PBR.Night", "Metallicness");
@@ -30,6 +32,7 @@ void PBRShaders::UpdateSettings() {
 	Settings.Night.AmbientScale = TheSettingManager->GetSettingF("Shaders.PBR.Night", "AmbientScale");
 	Settings.Night.SkylightingScale = TheSettingManager->GetSettingF("Shaders.PBR.Night", "SkylightingScale");
 	Settings.Night.SkylightingDirectionality = TheSettingManager->GetSettingF("Shaders.PBR.Night", "SkylightingDirectionality");
+	Settings.Night.SkylightingSpecularScale = TheSettingManager->GetSettingF("Shaders.PBR.Night", "SkylightingSpecularScale");
 
 	Settings.NightRain.Saturation = TheSettingManager->GetSettingF("Shaders.PBR.NightRain", "Saturation");
 	Settings.NightRain.Metallicness = TheSettingManager->GetSettingF("Shaders.PBR.NightRain", "Metallicness");
@@ -38,6 +41,7 @@ void PBRShaders::UpdateSettings() {
 	Settings.NightRain.AmbientScale = TheSettingManager->GetSettingF("Shaders.PBR.NightRain", "AmbientScale");
 	Settings.NightRain.SkylightingScale = TheSettingManager->GetSettingF("Shaders.PBR.NightRain", "SkylightingScale");
 	Settings.NightRain.SkylightingDirectionality = TheSettingManager->GetSettingF("Shaders.PBR.NightRain", "SkylightingDirectionality");
+	Settings.NightRain.SkylightingSpecularScale = TheSettingManager->GetSettingF("Shaders.PBR.NightRain", "SkylightingSpecularScale");
 
 	Settings.Interiors.Saturation = TheSettingManager->GetSettingF("Shaders.PBR.Interiors", "Saturation");
 	Settings.Interiors.Metallicness = TheSettingManager->GetSettingF("Shaders.PBR.Interiors", "Metallicness");
@@ -46,6 +50,7 @@ void PBRShaders::UpdateSettings() {
 	Settings.Interiors.AmbientScale = TheSettingManager->GetSettingF("Shaders.PBR.Interiors", "AmbientScale");
 	Settings.Interiors.SkylightingScale = TheSettingManager->GetSettingF("Shaders.PBR.Interiors", "SkylightingScale");
 	Settings.Interiors.SkylightingDirectionality = TheSettingManager->GetSettingF("Shaders.PBR.Interiors", "SkylightingDirectionality");
+	Settings.Interiors.SkylightingSpecularScale = TheSettingManager->GetSettingF("Shaders.PBR.Interiors", "SkylightingSpecularScale");
 }
 
 void PBRShaders::UpdateConstants() {
@@ -63,6 +68,10 @@ void PBRShaders::UpdateConstants() {
 	// Used only when SKYLIGHTING_MODE is 1; the SH path has no direction to lean.
 	Constants.ExtraData.z = std::lerp(TheShaderManager->GetTransitionValue(Settings.Default.SkylightingDirectionality, Settings.Night.SkylightingDirectionality, Settings.Interiors.SkylightingDirectionality),
 		TheShaderManager->GetTransitionValue(Settings.Rain.SkylightingDirectionality, Settings.NightRain.SkylightingDirectionality, Settings.Interiors.SkylightingDirectionality), rainFactor);
+
+	// Sky specular strength. No separate toggle: 0 disables the term.
+	Constants.ExtraData.w = std::lerp(TheShaderManager->GetTransitionValue(Settings.Default.SkylightingSpecularScale, Settings.Night.SkylightingSpecularScale, Settings.Interiors.SkylightingSpecularScale),
+		TheShaderManager->GetTransitionValue(Settings.Rain.SkylightingSpecularScale, Settings.NightRain.SkylightingSpecularScale, Settings.Interiors.SkylightingSpecularScale), rainFactor);
 
 	Constants.Data.x = std::lerp(TheShaderManager->GetTransitionValue(Settings.Default.Metallicness, Settings.Night.Metallicness, Settings.Interiors.Metallicness),
 		TheShaderManager->GetTransitionValue(Settings.Rain.Metallicness, Settings.NightRain.Metallicness, Settings.Interiors.Metallicness), rainFactor);

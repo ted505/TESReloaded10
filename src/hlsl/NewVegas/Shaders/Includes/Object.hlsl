@@ -171,3 +171,29 @@ float3 getAmbientLighting(float3 ambient, float3 albedo, float3 worldNormal, flo
     // worldNormalValid is 0 under a vanilla VS, where the carried world position is undefined.
     return (flatAmbient + skyTerm * worldNormalValid) * albedo;
 }
+
+// [Shaders.PBR.*] SkylightingSpecularScale. No separate toggle: 0 disables the term.
+#define SKY_SPECULAR_STRENGTH  (TESR_PBRExtraData.w)
+
+// Ambient with the sky's specular half, for the permutations that carry a view vector.
+//
+// worldView points from the surface toward the camera. The carried shadow world position is
+// camera-relative, so normalising its negation gives it with no extra interpolator.
+//
+// Metallicness splits the ambient rather than adding to it: a metal has no diffuse response, so
+// its share of the ambient moves into the reflection. Turning SkylightingSpecularScale down to
+// 0 therefore leaves a fully metallic surface with no ambient at all, which is what a metal lit
+// by nothing should look like, but it is a cliff rather than a fade.
+float3 getAmbientLighting(float3 ambient, float3 albedo, float3 worldNormal, float worldNormalValid,
+                          float3 worldView, float roughness, float metallicness) {
+    float3 flatAmbient = ambient * TESR_PBRData.w;
+    float3 skyTerm = SkyAmbientRadiance(worldNormal, TESR_PBRExtraData.z) * SKY_AMBIENT_STRENGTH;
+
+    float3 diffuse = (flatAmbient + skyTerm * worldNormalValid) * albedo * (1.0f - metallicness);
+
+    float3 f0 = lerp(float(0.04).rrr, albedo, metallicness);
+    float3 specular = SkyAmbientSpecular(worldNormal, worldView, roughness, f0, TESR_PBRExtraData.z)
+                    * SKY_SPECULAR_STRENGTH * worldNormalValid;
+
+    return diffuse + specular;
+}

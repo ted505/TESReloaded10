@@ -657,8 +657,11 @@ PS_OUTPUT main(PS_INPUT IN) {
         // ddx/ddy must stay at pixel-shader top level, so derive the world normal here rather
         // than inside getAmbientLighting.
         float3 ambNormal = GetShadowGeometricNormal(IN.shadowWorldPos.xyz);
+        // Camera-relative world position, so the view vector is just its negation.
+        float3 ambView = normalize(-IN.shadowWorldPos.xyz);
         lighting += getAmbientLighting(AmbientColor.rgb, baseColor.rgb, ambNormal,
-                                       SHADOW_VS_PRESENT(IN.shadowWorldPos.w) ? 1.0f : 0.0f);
+                                       SHADOW_VS_PRESENT(IN.shadowWorldPos.w) ? 1.0f : 0.0f,
+                                       ambView, roughness, metallicness);
     #endif
 
     // Other light sources.
@@ -905,8 +908,11 @@ PS_OUTPUT main(PS_INPUT IN) {
     
     // ddx/ddy must stay at pixel-shader top level.
     float3 ambNormal = GetShadowGeometricNormal(SHADOW_WP_LOAD(IN));
+    // Camera-relative world position, so the view vector is just its negation.
+    float3 ambView = normalize(-SHADOW_WP_LOAD(IN));
     lighting += getAmbientLighting(AmbientColor.rgb, baseColor.rgb, ambNormal,
-                                   SHADOW_WP_VALID(IN) ? 1.0f : 0.0f);
+                                   SHADOW_WP_VALID(IN) ? 1.0f : 0.0f,
+                                   ambView, roughness, metallicness);
 
     // TODO: Vanilla attenuates the full specular term by IN.lPosition.w for some reason. Is this a problem?
     float3 finalColor = lighting;

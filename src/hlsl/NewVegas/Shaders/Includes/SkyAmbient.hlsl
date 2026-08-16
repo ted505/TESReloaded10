@@ -25,6 +25,14 @@
     #define SKYLIGHTING_MODE 0
 #endif
 
+// Both modes need PI, and several shaders include PBRScale -- and so this file -- before their
+// own Helpers include. Guarded there, so including it early is free.
+#if defined(__INTELLISENSE__)
+    #include "Helpers.hlsl"
+#else
+    #include "includes/Helpers.hlsl"
+#endif
+
 #if SKYLIGHTING_MODE == 1
 
 // ---------------------------------------------------------------------------
@@ -49,13 +57,10 @@ float4 TESR_SunAmount    : register(c142); // x: dayTime
 float4 TESR_SunDiskColor : register(c143);
 float4 TESR_SunsetColor  : register(c144);
 
-// Helpers first: Sky.hlsl uses linearize(), and several shaders include PBRScale (and so this
-// file) before their own Helpers include.
+// Sky.hlsl uses linearize() from Helpers, included above the mode split.
 #if defined(__INTELLISENSE__)
-    #include "Helpers.hlsl"
     #include "Sky.hlsl"
 #else
-    #include "includes/Helpers.hlsl"
     #include "includes/Sky.hlsl"
 #endif
 
@@ -96,6 +101,12 @@ float3 SkyAmbientRadiance(float3 worldNormal, float directionality) {
     return sqrt(max(GetSkyRadiance(dir), 0.0f)) * wSky;
 }
 
+// Radiance looking along dir, with no cosine form factor: a specular lobe samples what the sky
+// looks like that way, not how much of the hemisphere a surface can see.
+float3 SkyRadianceAlong(float3 dir) {
+    return sqrt(max(GetSkyRadiance(dir), 0.0f));
+}
+
 #else
 
 // ---------------------------------------------------------------------------
@@ -119,13 +130,9 @@ float3 SkyAmbientRadiance(float3 worldNormal, float directionality) {
 // ---------------------------------------------------------------------------
 float4 TESR_SkyIrradiance[9] : register(c137);
 
-// worldNormal must be the GEOMETRIC world normal, unit length.
-float3 SkyAmbientRadiance(float3 worldNormal, float directionality) {
-    float3 n = worldNormal;
-
-    // Reconstruction is LINEAR irradiance; encode it. max() first because an order-2 SH fit can
-    // ring slightly negative, and sqrt of a negative is NaN.
-    float3 irradiance = TESR_SkyIrradiance[0].rgb
+// LINEAR irradiance along n. Callers encode.
+float3 SkyIrradianceLinear(float3 n) {
+    return TESR_SkyIrradiance[0].rgb
          + TESR_SkyIrradiance[1].rgb * n.y
          + TESR_SkyIrradiance[2].rgb * n.z
          + TESR_SkyIrradiance[3].rgb * n.x
@@ -134,10 +141,66 @@ float3 SkyAmbientRadiance(float3 worldNormal, float directionality) {
          + TESR_SkyIrradiance[6].rgb * (3.0f * n.z * n.z - 1.0f)
          + TESR_SkyIrradiance[7].rgb * (n.x * n.z)
          + TESR_SkyIrradiance[8].rgb * (n.x * n.x - n.y * n.y);
+}
 
-    return sqrt(max(irradiance, 0.0f));
+// worldNormal must be the GEOMETRIC world normal, unit length.
+float3 SkyAmbientRadiance(float3 worldNormal, float directionality) {
+    // max() before sqrt because an order-2 SH fit can ring slightly negative, and sqrt of a
+    // negative is NaN.
+    return sqrt(max(SkyIrradianceLinear(worldNormal), 0.0f));
+}
+
+// Radiance looking along dir. These coefficients carry IRRADIANCE -- the projection folded in
+// the clamped-cosine kernel -- so dividing by PI recovers the average radiance that produced
+// it, E = PI * L for a uniform source. That is the right magnitude but not the right sharpness:
+// the cosine kernel is a severe low-pass, so this cannot represent a mirror image of the sky,
+// only its gross gradient. Adequate here because the sky is smooth and the one high-frequency
+// feature in it, the sun disk, already has its own lobe in PBRSunSpecular.
+float3 SkyRadianceAlong(float3 dir) {
+    return sqrt(max(SkyIrradianceLinear(dir), 0.0f) / PI);
 }
 
 #endif
+
+// --- Sky specular ---------------------------------------------------------------------------
+// The image-based half of the sky light: what the surface reflects, as opposed to how much of
+// the sky it collects. Metals have no diffuse term at all, so without this a metal in shadow is
+// lit by nothing and reads as flat paint.
+//
+// Split-sum, minus the cubemap. The prefiltered-radiance half comes from evaluating the sky
+// model along the reflection vector -- the sky is an analytic function here, so a direction can
+// be sampled outright and no environment map has to be built, filtered or stored. The BRDF half
+// uses Lazarov's analytic fit to the environment BRDF integral, which replaces the usual 2D LUT
+// with a handful of ALU.
+//
+// What this cannot do is reflect anything except the sky: no geometry, no terrain, no horizon
+// occlusion. A metal facing a wall still mirrors open sky.
+
+// Karis / Lazarov, "Physically Based Shading on Mobile". Approximates the split-sum
+// integral SUM(F * G * vis) over the hemisphere as F0 * A + B.
+float3 EnvBRDFApprox(float3 f0, float roughness, float NdotV) {
+    const float4 c0 = float4(-1.0f, -0.0275f, -0.572f,  0.022f);
+    const float4 c1 = float4( 1.0f,  0.0425f,  1.04f,  -0.04f);
+    float4 r = roughness * c0 + c1;
+    float a004 = min(r.x * r.x, exp2(-9.28f * NdotV)) * r.x + r.y;
+    float2 ab = float2(-1.04f, 1.04f) * a004 + r.zw;
+    return f0 * ab.x + ab.y;
+}
+
+// worldNormal is the GEOMETRIC world normal, so the reflection does not follow normal-mapped
+// detail -- there is no world-space tangent frame at this point to perturb it with. worldView
+// points from the surface toward the camera.
+//
+// The reflection vector is pulled toward the normal as roughness rises. A rough lobe averages a
+// wide cone rather than the mirror direction, and with only a low-frequency sky to sample,
+// leaning toward the normal is what that averaging amounts to.
+float3 SkyAmbientSpecular(float3 worldNormal, float3 worldView, float roughness, float3 f0,
+                          float directionality) {
+    float3 mirror = reflect(-worldView, worldNormal);
+    float3 dir = normalize(lerp(mirror, worldNormal, roughness * roughness));
+
+    float NdotV = saturate(dot(worldNormal, worldView));
+    return SkyRadianceAlong(dir) * EnvBRDFApprox(f0, roughness, NdotV);
+}
 
 #endif

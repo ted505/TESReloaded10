@@ -507,7 +507,8 @@ PS_OUTPUT main(PS_INPUT IN)
     
         #if !defined(DIFFUSE) && !defined(ONLY_SPECULAR)
             if (TESR_ParallaxData.y)
-                lighting += getAmbientLighting(AmbientColor.rgb, baseColor.rgb, sunShadowNormal, shadowWorldPosValid);
+                lighting += getAmbientLighting(AmbientColor.rgb, baseColor.rgb, sunShadowNormal, shadowWorldPosValid,
+                                               normalize(-IN.shadowWorldPos.xyz), roughness, metallicness);
             else
                 lighting += baseColor.rgb * AmbientColor.rgb;
         #endif
