@@ -99,7 +99,12 @@
 
 #ifdef ONLY_LIGHT
     #define NO_FOG
-    #define NO_VERTEX_COLOR
+    // See ObjectTemplate: a split specular pass is ONLY_LIGHT but is added after the pass that
+    // multiplies vertex colour back in, so it has to apply the tint itself. At high
+    // metallicness reflectance is the albedo, tint included.
+    #if !defined(ONLY_SPECULAR)
+        #define NO_VERTEX_COLOR
+    #endif
 #endif
 
 #include "includes/Helpers.hlsl"

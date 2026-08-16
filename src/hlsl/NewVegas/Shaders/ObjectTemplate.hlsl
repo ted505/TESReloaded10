@@ -145,7 +145,15 @@
 
 #ifdef ONLY_LIGHT
     #define NO_FOG
-    #define NO_VERTEX_COLOR
+    // An ONLY_LIGHT pass drops vertex colour because it lights a white surface and a later
+    // TEXTURE_Vc pass multiplies texture and vertex colour back in. A split specular pass is
+    // ONLY_LIGHT by the rule above but is ADDED after that multiply, so nothing ever applies
+    // vertex colour to it. Harmless while specular was a colourless highlight; with PBR,
+    // reflectance is lerp(0.04, albedo, metallicness), so at high metallicness the tint is the
+    // surface, and it appears in the combined decomposition and vanishes in the split one.
+    #if !defined(ONLY_SPECULAR)
+        #define NO_VERTEX_COLOR
+    #endif
 #endif
 
 #include "includes/Helpers.hlsl"
@@ -597,7 +605,11 @@ PS_OUTPUT main(PS_INPUT IN) {
     //}
     
     #ifndef NO_VERTEX_COLOR
-        #if defined(HAIR)
+        // The hair branch tints by emittance and folds in the glow map, which belongs to the
+        // diffuse chain -- GlowMap is deliberately not declared for a split specular pass, and
+        // an additive specular pass must not re-add emittance. Those permutations want the
+        // plain vertex colour multiply below, which is all reflectance needs.
+        #if defined(HAIR) && !defined(ONLY_SPECULAR)
             float4 glow = tex2D(GlowMap, IN.uv.xy);
             baseColor.rgb = (2 * ((IN.vertexColor.g * (EmittanceColor.rgb - 0.5)) + 0.5)) * lerp(baseColor.rgb, glow.rgb, glow.a);
         #elif !defined(OPT)
