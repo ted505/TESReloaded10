@@ -20,6 +20,28 @@ float getRoughness(float gloss) {
     return saturate(max(0.043, 1 - gloss) * TESR_PBRData.y);
 }
 
+// Roughness straight from a packed material map, which stores it directly rather than as the
+// gloss the line above has to invert. The 0.043 floor and the Roughness scale are kept so the
+// two sources stay comparable: a perfectly smooth surface collapses the BRDF's denominator, and
+// the global knob should keep working on mapped materials.
+float getMappedRoughness(float roughnessChannel) {
+    return saturate(max(0.043, roughnessChannel) * TESR_PBRData.y);
+}
+
+// Resolves both surface parameters from one fetch of the packed material map.
+//
+// Channel order is Unreal's ORM: R occlusion, G roughness, B metallic. R is unused here. The
+// map is bound with sRGB off, which matters for more than convention now -- G is a curve, and
+// decoding it as colour would bend the roughness response.
+//
+// Where a map is bound it overrides both vanilla sources: G replaces the roughness derived from
+// the normal map's alpha gloss mask, and B replaces the flat global Metallicness. Where none is
+// bound TESR_MaterialMetallic.x is 0 and both fall back untouched.
+void getMaterialSurface(float4 materialMap, float gloss, out float roughness, out float metallicness) {
+    roughness    = lerp(getRoughness(gloss), getMappedRoughness(materialMap.g), TESR_MaterialMetallic.x);
+    metallicness = lerp(TESR_PBRData.x, materialMap.b, TESR_MaterialMetallic.x);
+}
+
 float getRoughness(float glossmap, float meshgloss){
     // return pow(glossmap, log(meshgloss));    
     // no gloss = 1

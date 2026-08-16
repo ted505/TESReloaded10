@@ -405,7 +405,6 @@ PS_OUTPUT main(PS_INPUT IN)
     dy = ddy(IN.uv.xy);
     
     float2 offsetUV = getParallaxCoords(distance, IN.uv.xy, dx, dy, viewDir.xyz, HeightMap);
-    float metallicness = lerp(TESR_PBRData.x, tex2D(MetallicMap, offsetUV.xy).r, TESR_MaterialMetallic.x);
 
     #if !defined(DIFFUSE) && !defined(ONLY_SPECULAR)
         float4 baseColor = tex2D(BaseMap, offsetUV.xy);
@@ -475,7 +474,10 @@ PS_OUTPUT main(PS_INPUT IN)
         float4 normal = tex2D(NormalMap, offsetUV.xy);
         normal.xyz = normalize(expand(normal.xyz));
 
-        float roughness = getRoughness(normal.a);
+        // Both come from the packed material map, so they need normal.a and sit here rather
+        // than beside offsetUV. Every consumer is inside this block; NO_LIGHT has no lighting.
+        float roughness, metallicness;
+        getMaterialSurface(tex2D(MetallicMap, offsetUV.xy), normal.a, roughness, metallicness);
     
         #if !defined(DIFFUSE) && !defined(POINT)
             if (TESR_ParallaxData.y)

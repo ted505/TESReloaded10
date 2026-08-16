@@ -576,11 +576,8 @@ PS_OUTPUT main(PS_INPUT IN) {
     float4 normal = tex2D(NormalMap, IN.uv.xy);
     normal.xyz = normalize(expand(normal.xyz));
     
-    float roughness = getRoughness(normal.a);
-    // Diagnostic: bypass both texture sampling and the per-draw presence constant.
-    // This reproduces the previously stable flat-metallicity shader behavior while
-    // leaving the mapped-material hook and pass structure installed.
-    float metallicness = lerp(TESR_PBRData.x, tex2D(MetallicMap, IN.uv.xy).r, TESR_MaterialMetallic.x);
+    float roughness, metallicness;
+    getMaterialSurface(tex2D(MetallicMap, IN.uv.xy), normal.a, roughness, metallicness);
 
     // baseColor is 1 here: the engine binds no diffuse to a split-specular pass. Reflectance is
     // lerp(0.04, albedo, metallicness), so leaving it at 1 renders metal as a white mirror while
@@ -861,11 +858,8 @@ PS_OUTPUT main(PS_INPUT IN) {
     float4 normal = tex2D(NormalMap, IN.uv.xy);
     normal.xyz = normalize(expand(normal.xyz));
     
-    float roughness = getRoughness(normal.a);
-    // Diagnostic: bypass both texture sampling and the per-draw presence constant.
-    // This reproduces the previously stable flat-metallicity shader behavior while
-    // leaving the mapped-material hook and pass structure installed.
-    float metallicness = lerp(TESR_PBRData.x, tex2D(MetallicMap, IN.uv.xy).r, TESR_MaterialMetallic.x);
+    float roughness, metallicness;
+    getMaterialSurface(tex2D(MetallicMap, IN.uv.xy), normal.a, roughness, metallicness);
     
     // Lighting.
     float3 viewDir = { IN.lightDir.w, IN.light2.w, IN.light3.w };
