@@ -14,7 +14,12 @@
 
 float4 TESR_PBRData : register(c32);
 float4 TESR_PBRExtraData : register(c33);
-float4 TESR_MaterialMetallic : register(c139);
+// c136, the gap between TESR_DebugVar (c135) and the sky block. SkyAmbient.hlsl claims c137
+// upward in both modes -- nine float4s for TESR_SkyIrradiance[9] in mode 0, eight scalars in
+// mode 1 -- so anything from c137 to c145 aliases it. Render.cpp writes this register raw,
+// through SetPixelShaderConstantF rather than the name-bound RegisterConstant path, so
+// MaterialMetallicRegister there has to track this declaration by hand.
+float4 TESR_MaterialMetallic : register(c136);
 
 float getRoughness(float gloss) {
     return saturate(max(0.043, 1 - gloss) * TESR_PBRData.y);
